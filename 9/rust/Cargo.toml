@@ -1,0 +1,17 @@
+[package]
+name    = "advantofcode2022-9"
+version = "0.0.0"
+authors = [ "Me" ]
+
+[dependencies]
+ndarray = "0.15.6"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+
+[[bin]]
+name = "rope"
+path = "./rope.rs"
