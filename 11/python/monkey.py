@@ -23,25 +23,35 @@ class Monkey:
         self.worry_manager = worry_manager
         self.inspected = 0
 
-    def do(self, monkeys):
+    def do(self, queues):
         while len(self.queue) > 0:
             worry = self.queue[0]
             del self.queue[0]
             worry = self.operation(worry)
             worry = self.worry_manager(worry)
             if worry % self.test_value == 0:
-                monkeys[self.dest_true].queue.append(worry)
+                queues[self.dest_true].append(worry)
             else:
-                monkeys[self.dest_false].queue.append(worry)
+                queues[self.dest_false].append(worry)
             self.inspected += 1
 
 
-def do_monkey_business(rounds, monkeys):
-    for _ in range(rounds):
+class MonkeyBusiness:
+    def __init__(self, *monkeys) -> None:
+        self.monkeys = []
+        self.destinations = []
+        self.add(*monkeys)
+
+    def add(self, *monkeys):
         for monkey in monkeys:
-            monkey.do(monkeys)
+            self.monkeys.append(monkey)
+            self.destinations.append(monkey.queue)
 
+    def do(self, rounds):
+        for _ in range(rounds):
+            for monkey in self.monkeys:
+                monkey.do(self.destinations)
 
-def most_active_monkeys(monkeys):
-    monkey_activity = [monkey.inspected for monkey in monkeys]
-    return tuple(sorted(monkey_activity, reverse=True)[:2])
+    def most_active(self):
+        monkey_activity = [monkey.inspected for monkey in self.monkeys]
+        return tuple(sorted(monkey_activity, reverse=True)[:2])

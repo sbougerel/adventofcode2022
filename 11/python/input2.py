@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-from monkey import Monkey, do_monkey_business, most_active_monkeys
+from monkey import Monkey, MonkeyBusiness
 
 
 def worry_manager(worry):
     return worry % (19 * 17 * 13 * 11 * 7 * 5 * 3 * 2)
 
 
-monkeys = [
+monkey_business = MonkeyBusiness()
+monkey_business.add(
     Monkey(
         queue=[52, 78, 79, 63, 51, 94],
         operation=lambda worry: worry * 13,
@@ -71,8 +72,8 @@ monkeys = [
         dest_false=4,
         worry_manager=worry_manager,
     ),
-]
+)
 
-do_monkey_business(10000, monkeys)
-x, y = most_active_monkeys(monkeys)
+monkey_business.do(10000)
+x, y = monkey_business.most_active()
 print(f"{x} * {y} = {x * y}")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from monkey import Monkey, do_monkey_business, most_active_monkeys
+from monkey import Monkey, MonkeyBusiness
 
-monkeys = [
+monkey_business = MonkeyBusiness(
     Monkey(
         queue=[79, 98],
         operation=lambda worry: worry * 19,
@@ -30,8 +30,8 @@ monkeys = [
         dest_true=0,
         dest_false=1,
     ),
-]
+)
 
-do_monkey_business(20, monkeys)
-x, y = most_active_monkeys(monkeys)
+monkey_business.do(20)
+x, y = monkey_business.most_active()
 print(f"{x} * {y} = {x * y}")
