@@ -1,10 +1,9 @@
 use itertools::Itertools;
 use petgraph::graph::{Graph, NodeIndex, UnGraph};
-use petgraph::visit::EdgeRef;
 use petgraph::Undirected;
 use regex::Regex;
 use std::cmp::max;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::io;
 
@@ -24,9 +23,7 @@ impl Display for Valve {
 
 fn plan(
     graph: &Graph<Valve, i32, Undirected>,
-    edge_cache: &HashMap<(NodeIndex, NodeIndex), i32>,
     path: &mut Vec<NodeIndex>,
-    open: Vec<NodeIndex>,
     time_taken: i32,
     pressure: i32,
 ) -> (Vec<NodeIndex>, i32, i32) {
@@ -37,23 +34,18 @@ fn plan(
     let mut best_time = time_taken;
     let mut best_pressure = pressure;
 
-    for (index, &neighbor) in open.iter().enumerate() {
+    for neighbor in graph.node_indices() {
+        if path.contains(&neighbor) {
+            continue;
+        }
         let node = path[path.len() - 1];
         path.push(neighbor);
-        let mut neighbor_open: Vec<NodeIndex> = open.clone();
-        neighbor_open.remove(index);
         // Go there (edge weight) and open valve (1)
-        let neighbor_time = time_taken + edge_cache[&(node, neighbor)] + 1;
+        let neighbor_time = time_taken + graph[graph.find_edge(node, neighbor).unwrap()] + 1;
         let neighbor_pressure = pressure + (MAX_TIME - neighbor_time) * graph[neighbor].flow_rate;
-        let (new_path, new_time, new_pressure) = plan(
-            graph,
-            edge_cache,
-            path,
-            neighbor_open,
-            neighbor_time,
-            neighbor_pressure,
-        );
-        path.pop().unwrap();
+        let (new_path, new_time, new_pressure) =
+            plan(graph, path, neighbor_time, neighbor_pressure);
+        path.pop();
         if new_pressure > best_pressure {
             best_pressure = new_pressure;
             best_time = new_time;
@@ -65,9 +57,7 @@ fn plan(
 
 fn plan2(
     graph: &Graph<Valve, i32, Undirected>,
-    edge_cache: &HashMap<(NodeIndex, NodeIndex), i32>,
     paths: &mut [Vec<NodeIndex>; 2],
-    open: Vec<NodeIndex>,
     times_taken: [i32; 2],
     pressure: i32,
 ) -> ([Vec<NodeIndex>; 2], [i32; 2], i32) {
@@ -78,32 +68,31 @@ fn plan2(
     let mut best_times = times_taken;
     let mut best_paths = [paths[0].clone(), paths[1].clone()];
 
-    for (index, &neighbor) in open.iter().enumerate() {
+    for neighbor in graph.node_indices() {
         if paths[0].contains(&neighbor) || paths[1].contains(&neighbor) {
             continue;
         }
         // for each neighbor, pick the closest actor
         let actor = usize::from(
-            (times_taken[0] + edge_cache[&(paths[0][paths[0].len() - 1], neighbor)])
-                >= (times_taken[1] + edge_cache[&(paths[1][paths[1].len() - 1], neighbor)]),
+            (times_taken[0]
+                + graph[graph
+                    .find_edge(paths[0][paths[0].len() - 1], neighbor)
+                    .unwrap()])
+                >= (times_taken[1]
+                    + graph[graph
+                        .find_edge(paths[1][paths[1].len() - 1], neighbor)
+                        .unwrap()]),
         );
         let node = paths[actor][paths[actor].len() - 1];
         paths[actor].push(neighbor);
-        let mut neighbor_open: Vec<NodeIndex> = open.clone();
-        neighbor_open.remove(index);
+        // Find the closest to
         // Go there (edge weight) and open valve (1)
         let mut neighbor_times = times_taken;
         neighbor_times[actor] += graph[graph.find_edge(node, neighbor).unwrap()] + 1;
         let neighbor_pressure =
             pressure + (MAX_TIME - neighbor_times[actor]) * graph[neighbor].flow_rate;
-        let (new_paths, new_times, new_pressure) = plan2(
-            graph,
-            edge_cache,
-            paths,
-            neighbor_open,
-            neighbor_times,
-            neighbor_pressure,
-        );
+        let (new_paths, new_times, new_pressure) =
+            plan2(graph, paths, neighbor_times, neighbor_pressure);
         paths[actor].pop();
         if new_pressure > best_pressure {
             best_pressure = new_pressure;
@@ -203,52 +192,25 @@ fn main() {
         }
     }
 
-    // Faster weight lookup (avoid going through all edges attached to node)
-    let edge_cache: HashMap<(NodeIndex, NodeIndex), i32> = graph
-        .edge_references()
-        .flat_map(|er| {
-            [
-                ((er.source(), er.target()), *er.weight()),
-                ((er.target(), er.source()), *er.weight()),
-            ]
-        })
-        .collect();
+    // Currently, part2 runs pretty slowly for the input (5-10 minutes).
+    // Considerations to speed up the algorithm:
+    //
+    // TODO: Use a much simpler permutation algorithm; like Heap's algorithm
+    // (iterative version) to eliminate copying with recursion. Prune
+    // permutations by time; as done here.
 
-    // Currently, part2 runs pretty slowly for the input (3-6 minutes).
-    // Considerations to up the algorithms:
-    //
-    // TODO: add presure memoisation tables: Rationale, for a given set of
-    // valves; if we already have more pressure in same or lower time, cut
-    // exploration;
-    //
-    // TODO: so much cloning and copying happening during the recursion that it
-    // might be better using A-star instead, especially when combined with
-    // above
-
-    // Initial conditions:
-    //
-    let mut start = vec![graph
+    // Initial conditions
+    let start = vec![graph
         .node_indices()
         .find(|n| graph[*n].name == "AA")
         .unwrap()];
-    let remaining = graph
-        .node_indices()
-        .filter(|n| graph[*n].name != "AA")
-        .collect::<Vec<_>>();
 
     // Part 1.
     //
     // Prep is done, time to compute some permutations and valve rates!
     // We simply generate the full combinatorial sequence while maintaining the best one
     // starting from AA and never exceeding 30 minutes (valve opening included)
-    let (best_path, best_time, best_pressure) = plan(
-        &graph,
-        &edge_cache,
-        &mut start.clone(),
-        remaining.clone(),
-        0,
-        0,
-    );
+    let (best_path, best_time, best_pressure) = plan(&graph, &mut start.clone(), 0, 0);
     println!(
         "Most pressure released: {} in {} minutes by opening valves {}",
         best_pressure,
@@ -256,22 +218,15 @@ fn main() {
         best_path
             .iter()
             .map(|n| { graph[*n].name.as_str() })
-            .intersperse(", ")
-            .collect::<String>()
+            .join(", ")
     );
 
     // Part 2.
     //
     // We simply track 2 different time; plans become "rough" since they might
     // not exactly be executed in the same order as proposed.
-    let (best_paths, best_times, best_pressure) = plan2(
-        &graph,
-        &edge_cache,
-        &mut [start.clone(), start.clone()],
-        remaining.clone(),
-        [4, 4],
-        0,
-    );
+    let (best_paths, best_times, best_pressure) =
+        plan2(&graph, &mut [start.clone(), start.clone()], [4, 4], 0);
     println!(
         "Most pressure released: {} in [{}, {}] minutes by opening valves [{}], [{}]",
         best_pressure,
@@ -280,12 +235,10 @@ fn main() {
         best_paths[0]
             .iter()
             .map(|n| { graph[*n].name.as_str() })
-            .intersperse(", ")
-            .collect::<String>(),
+            .join(", "),
         best_paths[1]
             .iter()
             .map(|n| { graph[*n].name.as_str() })
-            .intersperse(", ")
-            .collect::<String>()
+            .join(", ")
     );
 }
