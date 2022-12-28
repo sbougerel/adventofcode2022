@@ -1,13 +1,42 @@
-use itertools::Itertools;
-use petgraph::graph::{Graph, NodeIndex, UnGraph};
-use petgraph::Undirected;
+#[allow(unused_imports)]
+use petgraph::{
+    dot::Dot,
+    graph::{Graph, NodeIndex, UnGraph},
+    Undirected,
+};
 use regex::Regex;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io;
 
-const MAX_TIME: i32 = 30;
+// This problem can be conceptualised as a backtracking algorithms. In game
+// theory, backtracking algorithms is the building block to minmax. The way to
+// understand how it works is to ask: "Given a particular state in the game,
+// what is my next best move?", or in this particular problem, given a current
+// position a set of open valves, what is the next move the maximizes the amount
+// of pressure that can be released?
+//
+// Backtracking algorithm compute the solution to this answer by starting from
+// the deepest possible move and working backward. By working backwards from the
+// tree of all possible moves, the algorithm eventually builds up to the best
+// move starting from the root position.
+//
+// In this solution, we also add a transposition table, which stores the best
+// pressure that we've seen so far for a given position (at), past valves
+// visited, time and number of players remaining. This saves _a lot_ of
+// computation cycles.
+//
+// We could go even further by using the transposition table to reconstruct the
+// best set of moves (also called Principal variation), however it would require
+// that we change Entry and it's Hashing function. Maybe I'll come back to it if
+// I want to refactor this further.
+//
+// This should compute solutions in a matter of seconds.
+//
+// Resources:
+// - https://en.wikipedia.org/wiki/Backtracking
+// - https://en.wikipedia.org/wiki/Transposition_table
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 struct Valve {
@@ -21,86 +50,116 @@ impl Display for Valve {
     }
 }
 
-fn plan(
-    graph: &Graph<Valve, i32, Undirected>,
-    path: &mut Vec<NodeIndex>,
-    time_taken: i32,
-    pressure: i32,
-) -> (Vec<NodeIndex>, i32, i32) {
-    if time_taken > MAX_TIME {
-        return (Vec::new(), time_taken, 0); // busted!
-    }
-    let mut best_path = path.clone();
-    let mut best_time = time_taken;
-    let mut best_pressure = pressure;
-
-    for neighbor in graph.node_indices() {
-        if path.contains(&neighbor) {
-            continue;
-        }
-        let node = path[path.len() - 1];
-        path.push(neighbor);
-        // Go there (edge weight) and open valve (1)
-        let neighbor_time = time_taken + graph[graph.find_edge(node, neighbor).unwrap()] + 1;
-        let neighbor_pressure = pressure + (MAX_TIME - neighbor_time) * graph[neighbor].flow_rate;
-        let (new_path, new_time, new_pressure) =
-            plan(graph, path, neighbor_time, neighbor_pressure);
-        path.pop();
-        if new_pressure > best_pressure {
-            best_pressure = new_pressure;
-            best_time = new_time;
-            best_path = new_path;
-        }
-    }
-    (best_path, best_time, best_pressure)
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Entry {
+    // Entry in the transposition table, is represented by:
+    // - time
+    // - current position
+    // - number of players (part 2)
+    // - past visited (and opened) valves compressed to 64bit vector.
+    //
+    // Transposition tables entry take most of the memory of the program, so to
+    // make it more compact, I used a 64 bit vector to represent set of opened
+    // valves. I could compress `time_left` and `at` further into `i16` each,
+    // but not really worth the complexity.
+    //
+    // It can't store more than 64 different valves; but there's a lot of room
+    // since the graph is reduced to valves with flow_rates > 0 only (save for
+    // "AA")
+    time_left: i32,
+    at: NodeIndex,
+    players: usize,
+    valve_bitset: u64,
 }
 
-fn plan2(
-    graph: &Graph<Valve, i32, Undirected>,
-    paths: &mut [Vec<NodeIndex>; 2],
-    times_taken: [i32; 2],
-    pressure: i32,
-) -> ([Vec<NodeIndex>; 2], [i32; 2], i32) {
-    if max(times_taken[0], times_taken[1]) > MAX_TIME {
-        return ([Vec::new(), Vec::new()], times_taken, 0); // busted!
+impl Entry {
+    fn from_state(path: &Vec<NodeIndex>, time_left: i32, players: usize) -> Entry {
+        let mut valve_bitset: u64 = 0;
+        for valve in path {
+            valve_bitset |= 1 << valve.index();
+        }
+        Entry {
+            time_left,
+            at: path[path.len() - 1],
+            players,
+            valve_bitset,
+        }
     }
-    let mut best_pressure = pressure;
-    let mut best_times = times_taken;
-    let mut best_paths = [paths[0].clone(), paths[1].clone()];
+}
 
-    for neighbor in graph.node_indices() {
-        if paths[0].contains(&neighbor) || paths[1].contains(&neighbor) {
-            continue;
-        }
-        // for each neighbor, pick the closest actor
-        let actor = usize::from(
-            (times_taken[0]
-                + graph[graph
-                    .find_edge(paths[0][paths[0].len() - 1], neighbor)
-                    .unwrap()])
-                >= (times_taken[1]
-                    + graph[graph
-                        .find_edge(paths[1][paths[1].len() - 1], neighbor)
-                        .unwrap()]),
-        );
-        let node = paths[actor][paths[actor].len() - 1];
-        paths[actor].push(neighbor);
-        // Find the closest to
-        // Go there (edge weight) and open valve (1)
-        let mut neighbor_times = times_taken;
-        neighbor_times[actor] += graph[graph.find_edge(node, neighbor).unwrap()] + 1;
-        let neighbor_pressure =
-            pressure + (MAX_TIME - neighbor_times[actor]) * graph[neighbor].flow_rate;
-        let (new_paths, new_times, new_pressure) =
-            plan2(graph, paths, neighbor_times, neighbor_pressure);
-        paths[actor].pop();
-        if new_pressure > best_pressure {
-            best_pressure = new_pressure;
-            best_times = new_times;
-            best_paths = new_paths;
-        }
+// Transposition table maps an Entry to a max pressure (i32). We store only
+// exact solutions here.
+type TTable = HashMap<Entry, i32>;
+
+type ValveNetwork = Graph<Valve, i32, Undirected>;
+
+struct Solver<'a> {
+    graph: &'a ValveNetwork,
+    ttable: &'a mut TTable,
+    max_time: i32,
+    start: NodeIndex,
+}
+
+impl Solver<'_> {
+    fn max_pressure(&mut self) -> i32 {
+        self.max_pressure_multiplayer(1)
     }
-    (best_paths, best_times, best_pressure)
+
+    fn max_pressure_multiplayer(&mut self, players: usize) -> i32 {
+        let mut path = Vec::<NodeIndex>::new();
+        // _max_pressure_impl will initialize variables from &self if we give a
+        // remaining time value of 0.
+        self._max_pressure_impl(&mut path, 0, players)
+    }
+
+    fn _max_pressure_impl(
+        &mut self,
+        path: &mut Vec<NodeIndex>,
+        time_left: i32,
+        players: usize,
+    ) -> i32 {
+        if time_left <= 0 {
+            if players == 0 {
+                return 0;
+            }
+            // Make next player play from start, but skip already visited nodes
+            path.push(self.start);
+            let pressure = self._max_pressure_impl(path, self.max_time, players - 1);
+            path.pop();
+            return pressure;
+        }
+
+        // Check transposition tables for known exact entry
+        let entry = Entry::from_state(path, time_left, players);
+        if let Some(pressure) = self.ttable.get(&entry) {
+            return *pressure;
+        }
+
+        let at = path[path.len() - 1];
+        let mut pressure = 0;
+
+        for next in self.graph.node_indices() {
+            if path.contains(&next) {
+                continue;
+            }
+            path.push(next);
+            pressure = max(
+                pressure,
+                self._max_pressure_impl(
+                    path,
+                    // Open valve here before moving down
+                    time_left - 1 - self.graph[self.graph.find_edge(at, next).unwrap()],
+                    players,
+                ),
+            );
+            path.pop(); // restore state
+        }
+
+        // Store transposition
+        pressure += time_left * self.graph[at].flow_rate;
+        self.ttable.insert(entry, pressure);
+        pressure
+    }
 }
 
 fn main() {
@@ -126,7 +185,7 @@ fn main() {
         .collect();
 
     // This graphs contains all nodes (even those with flow rate = 0) with weight = 1
-    let mut graph = UnGraph::<Valve, i32>::default();
+    let mut graph = ValveNetwork::default();
     {
         // Add vertices (nodes) in a dictionary for construction only
         let node_map = captures
@@ -153,7 +212,7 @@ fn main() {
     }
 
     // Bypass nodes with "rate=0" unless it's "AA" by connecting their neighbor
-    // then remove then (saves cycles later)
+    // then remove then (saves cycles for next step)
     while let Some(node) = graph
         .node_indices()
         .find(|node| graph[*node].name != "AA" && graph[*node].flow_rate == 0)
@@ -174,7 +233,7 @@ fn main() {
         graph.remove_node(node);
     }
 
-    // Now fully-connect the graph (save cycles later) with minimum weights, so
+    // Finally, fully-connect the graph (save cycles later) with minimum weights, so
     // we know how long it takes to go from any valve to any other.
     for node in graph.node_indices() {
         let mut neighbors_queue = graph.neighbors(node).collect::<Vec<_>>();
@@ -192,53 +251,44 @@ fn main() {
         }
     }
 
-    // Currently, part2 runs pretty slowly for the input (5-10 minutes).
-    // Considerations to speed up the algorithm:
+    // Optional tree print if you want to see what it looks like:
+    // println!("{:?}", Dot::with_config(&graph, &[]));
+
+    // Time to compute the solution!
     //
-    // TODO: Use a much simpler permutation algorithm; like Heap's algorithm
-    // (iterative version) to eliminate copying with recursion. Prune
-    // permutations by time; as done here.
+    // Initialise the transposition table (empty) and path (state of the
+    // exploration) then run the solution!
 
     // Initial conditions
-    let start = vec![graph
+    let start = graph
         .node_indices()
         .find(|n| graph[*n].name == "AA")
-        .unwrap()];
+        .unwrap();
+    let mut ttable = TTable::new();
+    let mut solver = Solver {
+        graph: &graph,
+        ttable: &mut ttable,
+        max_time: 30,
+        start,
+    };
 
     // Part 1.
     //
-    // Prep is done, time to compute some permutations and valve rates!
-    // We simply generate the full combinatorial sequence while maintaining the best one
-    // starting from AA and never exceeding 30 minutes (valve opening included)
-    let (best_path, best_time, best_pressure) = plan(&graph, &mut start.clone(), 0, 0);
-    println!(
-        "Most pressure released: {} in {} minutes by opening valves {}",
-        best_pressure,
-        best_time,
-        best_path
-            .iter()
-            .map(|n| { graph[*n].name.as_str() })
-            .join(", ")
-    );
+    // Prep is done, time to compute some permutations and valve rates! We
+    // simply generate the full combinatorial sequence while maintaining the
+    // best one starting from AA and never exceeding 30 minutes (valve opening
+    // included)
+    println!("Part 1: max pressure released: {}", solver.max_pressure());
 
     // Part 2.
     //
-    // We simply track 2 different time; plans become "rough" since they might
-    // not exactly be executed in the same order as proposed.
-    let (best_paths, best_times, best_pressure) =
-        plan2(&graph, &mut [start.clone(), start.clone()], [4, 4], 0);
+    // Here we simply alternate between player 1 and player 2, if you will,
+    // knowing that the time remaining is always based on what they do
+    // separately, as if player 2 (elephant) only played when player 1 had
+    // exhausted his time.
+    solver.max_time = 26;
     println!(
-        "Most pressure released: {} in [{}, {}] minutes by opening valves [{}], [{}]",
-        best_pressure,
-        best_times[0],
-        best_times[1],
-        best_paths[0]
-            .iter()
-            .map(|n| { graph[*n].name.as_str() })
-            .join(", "),
-        best_paths[1]
-            .iter()
-            .map(|n| { graph[*n].name.as_str() })
-            .join(", ")
+        "Part 2: max pressure released with 2 players: {}",
+        solver.max_pressure_multiplayer(2)
     );
 }
