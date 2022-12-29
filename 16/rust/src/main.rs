@@ -212,7 +212,7 @@ fn main() {
     }
 
     // Bypass nodes with "rate=0" unless it's "AA" by connecting their neighbor
-    // then remove then (saves cycles for next step)
+    // then remove them (saves cycles for next step)
     while let Some(node) = graph
         .node_indices()
         .find(|node| graph[*node].name != "AA" && graph[*node].flow_rate == 0)
